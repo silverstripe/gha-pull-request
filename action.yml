@@ -1,0 +1,78 @@
+name: Branch commit and pull-request
+description: GitHub Action to create a branch, commit and a pull-request as the github-actions user
+
+inputs:
+  branch:
+    type: string
+    required: true
+  title:
+    type: boolean
+    required: true
+  description:
+    type: string
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+
+    - name: Validate branch
+      shell: bash
+      env:
+        BRANCH: ${{ inputs.branch }}
+      run: |
+        git check-ref-format "heads/$BRANCH" > /dev/null
+        if [[ $? != "0" ]]; then
+          echo "Invalid branch name"
+          exit 1
+        fi
+        if [[ $(git ls-remote --heads origin $BRANCH) != "" ]]; then
+          echo "Branch $BRANCH already exists"
+          exit 1
+        fi
+      
+    - name: Branch commit and pull-request
+      shell: bash
+      env:
+        BRANCH: ${{ inputs.branch }}
+        TITLE: ${{ inputs.title }}
+        DESCRIPTION: ${{ inputs.description }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: |
+        # Escape double quotes '"' => '\"'
+        TITLE=${TITLE//\"/\\\"}
+        DESCRIPTION=${DESCRIPTION//\"/\\\"}
+        BASE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+        # Run git commit, push and create pull-request as 'github-actions' user
+        git config --local user.name "github-actions"
+        # The 41898282+ email prefixed is the required, matches the ID here
+        # https://api.github.com/users/github-actions%5Bbot%5D
+        # https://github.community/t/github-actions-bot-email-address/17204/6
+        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git checkout -b "$BRANCH"
+        git add .
+        git commit -m "$TITLE"
+        git status
+        git push --set-upstream origin "$BRANCH"
+        # Create new pull-request via GitHub API
+        # https://docs.github.com/en/rest/reference/pulls#create-a-pull-request
+        RESP_CODE=$(curl -w %{http_code} -s -o /dev/null \
+        -X POST https://api.github.com/repos/$GITHUB_REPOSITORY/pulls \
+        -H "Accept: application/vnd.github.v3+json" \
+        -H "Authorization: token ${{ github.token }}" \
+        -d @- << EOF
+        {
+          "title": "$TITLE",
+          "body": "$DESCRIPTION",
+          "head": "$BRANCH",
+          "base": "$BASE_BRANCH"
+        }
+        EOF
+        )
+        if [[ $RESP_CODE == "201" ]]; then
+          echo "New pull-request created"
+        else
+          echo "Fail to create pull-request - HTTP response code was $RESP_CODE"
+          exit 1
+        fi
