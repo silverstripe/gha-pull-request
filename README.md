@@ -10,7 +10,7 @@ This action is intended as a step in a larger workflow and at a minimum the repo
 ```yml
 steps:
   - name: Create pull-request
-    uses: silverstripe/gha-pull-request@main
+    uses: silverstripe/gha-pull-request@v1
     with:
       branch: pulls/4/my-branch
       title: NEW My pull-request title
