@@ -6,7 +6,7 @@ inputs:
     type: string
     required: true
   title:
-    type: boolean
+    type: string
     required: true
   description:
     type: string
