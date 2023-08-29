@@ -6,7 +6,7 @@ inputs:
     type: string
     required: true
   title:
-    type: boolean
+    type: string
     required: true
   description:
     type: string
@@ -32,18 +32,19 @@ runs:
           exit 1
         fi
       
-    - name: Branch commit and pull-request
+    - name: Git operations
+      id: git-operations
       shell: bash
       env:
         BRANCH: ${{ inputs.branch }}
         TITLE: ${{ inputs.title }}
-        DESCRIPTION: ${{ inputs.description }}
         GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
         # Escape double quotes '"' => '\"'
         TITLE=${TITLE//\"/\\\"}
-        DESCRIPTION=${DESCRIPTION//\"/\\\"}
         BASE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+        echo "BASE_BRANCH is $BASE_BRANCH"
+        echo "base_branch=$BASE_BRANCH" >> $GITHUB_OUTPUT
         # Run git commit, push and create pull-request as 'github-actions' user
         git config --local user.name "github-actions"
         # The 41898282+ email prefixed is the required, matches the ID here
@@ -55,16 +56,56 @@ runs:
         git commit -m "$TITLE"
         git status
         git push --set-upstream origin "$BRANCH"
+
+    # Trigger CI manually as the pull-request created using the GitHub API later will NOT trigger any new
+    # workflows e.g. ci.yml as a measure to protect against infinite loops
+    # https://github.com/peter-evans/create-pull-request/issues/48#issuecomment-537478081
+    - name: Trigger CI
+      id: trigger-ci
+      uses: silverstripe/gha-trigger-ci@v1
+      with:
+        branch: ${{ inputs.branch }}
+        validate_branch: false
+
+    - name: Update description
+      id: update-description
+      shell: bash
+      env:
+        BRANCH: ${{ inputs.branch }}
+        DESCRIPTION: ${{ inputs.description }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: |
+        # Escape / to %2F e.g. pulls/1.9/lorem => pulls%2F1.9%2Florem
+        ESCAPED_BRANCH=${BRANCH//\//%2F}
+        # Escape double quotes '"' => '\"'
+        UPDATED_DESRCRIPTION=${DESCRIPTION//\"/\\\"}
+        # Add a note to the pull-request description to explain where to find the CI workflow results
+        UPDATED_DESRCRIPTION=$(cat << EOF
+        $UPDATED_DESRCRIPTION\n\n---\n\nThis pull-request was created by a [GitHub Action](/silverstripe/gha-pull-request) and for GitHubs own security reasons cannot automatically trigger a subsequent CI workflow like it would if a human created the pull-request.\n\nInstead a CI workflow was created via the GitHub API. One shortcoming of doing this is the results of the CI workflow do not show above the merge button like they do on normal pull-requests.\n\n**BEFORE MERGING - View the CI workflow runs for the branch in this pull-request in this [filtered list](/$GITHUB_REPOSITORY/actions?query=branch%3A$ESCAPED_BRANCH).**
+        EOF
+        )
+        echo "UPDATED_DESRCRIPTION is $UPDATED_DESRCRIPTION"
+        echo "updated_description=$UPDATED_DESRCRIPTION" >> $GITHUB_OUTPUT
+
+    - name: Pull request
+      shell: bash
+      env:
+        BRANCH: ${{ inputs.branch }}
+        BASE_BRANCH: ${{ steps.git-operations.outputs.base_branch }}
+        TITLE: ${{ inputs.title }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        UPDATED_DESRCRIPTION: ${{ steps.update-description.outputs.updated_description }}
+      run: |
         # Create new pull-request via GitHub API
         # https://docs.github.com/en/rest/reference/pulls#create-a-pull-request
-        RESP_CODE=$(curl -w %{http_code} -s -o /dev/null \
+        RESP_CODE=$(curl -w %{http_code} -s -o __response.json \
         -X POST https://api.github.com/repos/$GITHUB_REPOSITORY/pulls \
         -H "Accept: application/vnd.github.v3+json" \
         -H "Authorization: token ${{ github.token }}" \
         -d @- << EOF
         {
           "title": "$TITLE",
-          "body": "$DESCRIPTION",
+          "body": "$UPDATED_DESRCRIPTION",
           "head": "$BRANCH",
           "base": "$BASE_BRANCH"
         }
@@ -74,5 +115,14 @@ runs:
           echo "New pull-request created"
         else
           echo "Fail to create pull-request - HTTP response code was $RESP_CODE"
+          cat __response.json
           exit 1
+        fi
+
+    - name: Delete temporary files
+      shell: bash
+      if: always()
+      run: |
+        if [[ -f __response.json ]]; then
+          rm __response.json
         fi
