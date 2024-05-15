@@ -8,11 +8,20 @@ This action is intended as a step in a larger workflow and at a minimum the repo
 
 **workflow.yml**
 ```yml
-steps:
-  - name: Create pull-request
-    uses: silverstripe/gha-pull-request@v1
-    with:
-      branch: pulls/4/my-branch
-      title: NEW My pull-request title
-      description: (Optional) This text will appear in the body of the GitHub pull-request
+permissions: {}
+
+jobs:
+  pullrequest:
+    # ...
+    permissions:
+      contents: write
+      pull-request: write
+      actions: write
+    steps:
+      - name: Create pull-request
+        uses: silverstripe/gha-pull-request@v1
+        with:
+          branch: pulls/4/my-branch
+          title: NEW My pull-request title
+          description: (Optional) This text will appear in the body of the GitHub pull-request
 ```
